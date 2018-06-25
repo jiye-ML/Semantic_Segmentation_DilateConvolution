@@ -72,6 +72,7 @@ class InferenceRunner(object):
 
     # this function is the same as the one in the original repository
     # basically it performs upsampling for datasets having zoom > 1
+    # 该方法很慢， 不建议使用
     @staticmethod
     def interp_map(prob, zoom, width, height):
         channels = prob.shape[2]

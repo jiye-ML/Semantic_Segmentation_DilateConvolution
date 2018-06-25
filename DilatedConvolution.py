@@ -1,15 +1,90 @@
 import tensorflow as tf
+import os
+
+
+from DataConfig import Config
+from Tools import Tools
+import pickle
 
 
 class DilatedConvolution(object):
 
-    def __init__(self, dataset, input_tensor, w_pretrained, trainable):
+    def __init__(self, dataset, data, learning_rate, trainable=True):
+
+        # data
         self.dataset = dataset
-        self.input_tensor = input_tensor
-        self.w_pretrained = w_pretrained
+        self.data = data
+        self.class_number = self.data.class_number
+        self.image_height = self.data.image_height
+        self.image_width = self.data.image_width
+        self.image_channel = self.data.image_channel
+        self.label_channel = self.data.label_channel
+        self.label_channel = self.data.label_channel
+        self.batch_size = self.data.batch_size
+
+        # 创建checkpoint目录
+        self.checkpoint = Tools.new_dir(os.path.join("checkpoint", 'dilated_' + self.dataset))
+        self.checkpoint_file = os.path.join(self.checkpoint, "dilated")
+        self.checkpoint_file_meta = self.checkpoint_file + ".meta"
+        # model
+        self.learning_rate = learning_rate
+        self.w_pretrained = self.need_load_pretrained()
         self.trainable = trainable
 
-        self.softmax = self.dilated_convolution_by_pretrained()
+        self.graph = tf.Graph()
+
+        self.images, self.labels = None, None
+        self.x, self.y, self.logits, self.loss, self.train_op = None, None, None, None, None
+        self.prediction, self.is_correct, self.accuracy = None, None, None
+        # 如果还没有图，绘制
+        if self.w_pretrained is not None:
+            with self.graph.as_default():
+                # input
+                self.x = tf.placeholder(tf.float32, [None, self.image_height, self.image_width, self.image_channel],
+                                        name="x")
+                self.y = tf.placeholder(tf.uint8, [None, self.image_height, self.image_width, self.label_channel],
+                                        name="y")
+                # output
+                self.logits = self.dilated_convolution_by_pretrained()
+                self.prediction = tf.reshape(tf.cast(tf.argmax(self.logits, axis=3), tf.uint8),
+                                                     shape=[-1, self.image_height, self.image_width,self.label_channel],
+                                                     name="prediction")  # 预测 输出
+                self.is_correct = tf.cast(tf.equal(self.prediction, tf.cast(self.y, tf.uint8)), tf.uint8, name="is_correct")  # 是否正确
+                self.accuracy = tf.reduce_mean(tf.cast(self.is_correct, tf.float32), name='accuracy')  # 正确率
+
+                # loss
+                self.loss = self.loss_cross_entropy()
+                # train
+                self.train_op = self.get_train_op()
+
+                # load batch
+                self.images, self.labels = self.data.get_train_data()
+                pass
+        else : # 如果有图，加载节点
+            with tf.Session(config=tf.ConfigProto(gpu_options=tf.GPUOptions(allow_growth=True))) as sess:
+                # 从checkpoint中导入模型
+                saver = tf.train.import_meta_graph(self.checkpoint_file_meta)
+                saver.restore(sess, tf.train.latest_checkpoint(self.checkpoint))
+
+                self.graph = tf.get_default_graph()
+
+                # input
+                self.x = self.graph.get_tensor_by_name('x:0')
+                self.y = self.graph.get_tensor_by_name('y:0')
+                # output
+                self.logits = self.graph.get_tensor_by_name('ResizeBilinear_1:0')
+                self.prediction = self.graph.get_tensor_by_name('prediction:0')
+                self.is_correct = self.graph.get_tensor_by_name('is_correct:0')
+                self.accuracy = self.graph.get_tensor_by_name('accuracy:0')
+
+                # loss
+                self.loss = self.graph.get_tensor_by_name('loss/0:0')
+                # train
+                self.train_op = self.graph.get_tensor_by_name('train_op')
+
+                # load batch
+                self.images, self.labels = self.graph.get_tensor_by_name('shuffle_batch')
+            pass
         pass
 
     # 卷积
@@ -20,26 +95,6 @@ class DilatedConvolution(object):
             if atrous_rate is None:
                 conv_out = tf.nn.conv2d(input, w_kernel, strides, padding)
             else:
-                # 首先，对于空洞卷积，将卷积核“膨胀”：
-                # 1.若进行VALID卷积，需要对输入padding atrous_rate-1个0，否则最外围的输入值就没有被卷积。
-                #   所以，如果对输入不进行padding，空洞卷积的输出应该减少：
-                #       reduce_size = {[k_size * atrous_rate + (atrous_rate - 1)] - 1}
-                #   由于对输入padding了 2 * (atrous_rate - 1)个0，所以最终减少了 reduce_size - 2 * (atrous_rate - 1)
-                # 2.若进行SAME卷积，输入和输出的形状相同。
-                # 3.计算感受野：
-                #   1)相对于原始输入计算：
-                #       Define the receptive field of an element p in F_i+1 as the set of elements in F_0
-                #       that modify the value of F_i+1(p).
-                #       计算公式为：F_i+1(p) = 2 * F_i(p) - 1， F_0 = k_size
-                #   2)相对与前一个输入：
-                #       感受野大小为：“核的大小” - “最外围无效的区域”
-                #           [k_size * atrous_rate + (atrous_rate - 1)] - 2 * (atrous_rate - 1)
-
-                # 图像语义分割需要获取“上下文信息”，
-                #   1.“不使用空洞卷积的传统卷积”通过“下采样（pooling）”来增大感受野（卷积核的大小不变，减少了数据量，
-                #       有利于防止过拟合，但是损失了分辨率，丢失了一些信息），以此获取上下文信息。
-                #   2.“空洞卷积”通过“膨胀卷积核”来增大感受野（参数个数没有增加，数据量没有减少，分辨率没有损失，
-                #       因此，计算量增大，内存消耗增大），以此获取上下文信息。
                 conv_out = tf.nn.atrous_conv2d(input, w_kernel, atrous_rate, padding)
 
             if add_bias:
@@ -56,7 +111,8 @@ class DilatedConvolution(object):
         if self.dataset not in ['cityscapes', 'camvid']:
             raise ValueError('Dataset "{}" not supported.'.format(self.dataset))
         else:
-            h = self.input_tensor  # [1396, 1396, 3]
+            conv_margin = Config[self.dataset]["conv_margin"]
+            h = tf.pad(self.x, [[0, 0], [conv_margin, conv_margin], [conv_margin, conv_margin], [0, 0]], mode="REFLECT")
             h = self._conv('conv1_1', h)  # [1394, 1394, 64]
             h = self._conv('conv1_2', h)  # [1392, 1392, 64]
             h = tf.layers.max_pooling2d(h, pool_size=(2, 2), strides=(2, 2), padding='valid', name='pool1')  # [696, 696, 64]
@@ -121,8 +177,52 @@ class DilatedConvolution(object):
             else:
                 logits = h  # [128, 128, 19]
 
-            softmax = tf.nn.softmax(logits, dim=3, name='softmax')
+        return tf.image.resize_images(logits, size=[self.data.image_height, self.data.image_width])
 
-        return softmax
+
+    def loss_cross_entropy(self):
+        with tf.name_scope('loss'):
+            # reshape label
+            labels = tf.squeeze(tf.cast(self.y, tf.int32), axis=3)
+            # compute the cross entropy of logits vs labels
+            cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=labels, logits=self.logits)
+            cross_entropy_mean = tf.reduce_mean(cross_entropy, name="0")
+        return cross_entropy_mean
+
+    def get_train_op(self):
+        return tf.train.AdamOptimizer(learning_rate=self.learning_rate).minimize(self.loss, name="train_op")
+
+    # 如果还没有模型，加载一份预训练的
+    def need_load_pretrained(self):
+        # 转换模型
+        w_pretrained = None
+        if not os.path.exists(self.checkpoint_file_meta):
+            print('Loading pre-trained weights...')
+            with open(Config[self.dataset]['weights_file'], 'rb') as f:
+                w_pretrained = pickle.load(f)
+            print('Loading pre-trained weights Done.')
+        print("Model has existed ...")
+
+        return w_pretrained
+
+    # this function is the same as the one in the original repository
+    # basically it performs upsampling for datasets having zoom > 1
+    @staticmethod
+    def interp_map(prob, zoom, width, height):
+        channels = prob.shape[2]
+        zoom_prob = tf.zeros((height, width, channels), dtype=tf.float32)
+        for c in range(channels):
+            for h in range(height):
+                for w in range(width):
+                    r0 = h // zoom
+                    r1 = r0 + 1
+                    c0 = w // zoom
+                    c1 = c0 + 1
+                    rt = float(h) / zoom - r0
+                    ct = float(w) / zoom - c0
+                    v0 = rt * prob[r1, c0, c] + (1 - rt) * prob[r0, c0, c]
+                    v1 = rt * prob[r1, c1, c] + (1 - rt) * prob[r0, c1, c]
+                    zoom_prob[h, w, c] = (1 - ct) * v0 + ct * v1
+        return zoom_prob
 
     pass
