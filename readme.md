@@ -1,22 +1,14 @@
-# FCN-DilatedConvolution
+### 本项目利用tensorflow实现了Dilated conv网络在CamVid数据集上分割
 
-A *Tensorflow* implementation of semantic segmentation according to 
-[Multi-Scale Context Aggregation by Dilated Convolutions](https://arxiv.org/abs/1511.07122) by Yu and Koltun.
-
-Pretrained weights have been converted to TensorFlow from the [original Caffe implementation](https://github.com/fyu/dilation).
+* [论文阅读笔记](https://github.com/jiye-ML/Semantic_Segmentation_Review.git)
 
 
-## Run
-1. Download pretrained weights from here:
-    * [CityScapes weights](https://drive.google.com/open?id=0Bx9YaGcDPu3XR0d4cXVSWmtVdEE)
-    * [CamVid weights](https://drive.google.com/open?id=0Bx9YaGcDPu3Xd0JrcXZpTEpkb0U)
-
-2. Move weights file into [`pretrained`](pretrained) directory.
-
-3. Run the model on the test image by executing [`InferenceRunner.py`](InferenceRunner.py).
-
-
-## Reference
-* [Multi Scale Context Aggregation by Dilated Convolutions](https://github.com/alisure-ml/FCN-Review/blob/master/Multi_Scale_Context_Aggregation_by_Dilated_Convolutions.md)
-* [Multi-Scale Context Aggregation by Dilated Convolutions](https://arxiv.org/abs/1511.07122)
-* [ndrplz/dilation-tensorflow](https://github.com/ndrplz/dilation-tensorflow)
+* 本文包括文件
+    * Tools包含一些工具方法
+    * Train： 是数据的训练文件
+    * Data 数据文件
+    * DataConfig 数据配置文件
+    * DilatedConvolution 网络
+    * InferenceRunner 推断文件
+* 本文使用 camvid 数据集
+    * [数据集介绍参见](https://github.com/jiye-ML/DL-Data.git)
